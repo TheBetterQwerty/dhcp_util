@@ -13,6 +13,7 @@
 
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67
+#define DELAY 1
 
 struct argument {
 	int integer_part;
@@ -148,6 +149,7 @@ void send_packets(int cnt) {
 
 		cnt--;
 		free_packet(packet);
+		sleep(DELAY);
 	}
 
 	close(sockfd);
