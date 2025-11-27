@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pcap.h>
+#include <time.h>
 #include <pthread.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
@@ -14,14 +15,12 @@
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67
 #define DELAY 1
+#define TIME 5.0
 
-struct argument {
-	int integer_part;
-	char* char_pointer;
-};
+int recieved = 0;
 
 void capture_packets(
-	u_char* user __attribute__((unused)),
+	double time,
 	const struct pcap_pkthdr* pkt_header __attribute__((unused)),
 	const u_char* packet
 ) {
@@ -38,17 +37,17 @@ void capture_packets(
 	// magic cookie check
 	if (memcmp(offer_packet->options, "\x63\x82\x53\x63", 4)) return;
 
-	printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x -> IP: %s\n",
+	printf("[ %.2lfs] OFFER: MAC %02x:%02x:%02x:%02x:%02x:%02x -> IP %s\n",
+		time,
 		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
 		inet_ntoa(offered_ip)
 	);
 
+	recieved++;
 }
 
 void* read_packet(void* _args) {
-	struct argument* args = _args;
-	char* dev = args->char_pointer;
-
+	char* dev = (char*) _args;
 	if (!dev) return NULL;
 
 	char errbuf[PCAP_ERRBUF_SIZE];
@@ -80,9 +79,30 @@ void* read_packet(void* _args) {
 		goto cleanup;
 	}
 
-	if (pcap_loop(handle, args->integer_part, capture_packets, NULL) < 0) {
-		fprintf(stderr, "[!] Error: capturing packet!\n");
-		goto cleanup;
+	struct timespec start_prog, start, current;
+	struct pcap_pkthdr* header;
+	const u_char* packet;
+
+	double duration = 0.0;
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	clock_gettime(CLOCK_MONOTONIC, &start_prog);
+
+	while (duration <= TIME) {
+		int ret = pcap_next_ex(handle, &header, &packet);
+
+		if (ret == 1) {
+			double time = (current.tv_sec - start_prog.tv_sec)
+							+ (current.tv_nsec - start_prog.tv_nsec) / 1e9;
+			capture_packets(time, header, packet);
+			clock_gettime(CLOCK_MONOTONIC, &start);
+		} else if (ret == -1 || ret == -2) {
+			fprintf(stderr, "[!] Error: %s\n", pcap_geterr(handle));
+			break;
+		}
+
+		clock_gettime(CLOCK_MONOTONIC, &current);
+		duration = (current.tv_sec - start.tv_sec)
+                     + (current.tv_nsec - start.tv_nsec) / 1e9;
 	}
 
 cleanup:
@@ -131,8 +151,11 @@ void send_packets(int cnt) {
 	server_addr.sin_port = htons(DHCP_SERVER_PORT);
 	server_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
 
+	struct timespec start, current;
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	double duration = 0.0;
 
-	while (cnt) {
+	for (int i = 0; i < cnt; i++) {
 		dhcp* packet = create_packet();
 		if (!packet) {
 			fprintf(stderr, "[!] Error: Creating packet for dhcp\n");
@@ -145,9 +168,12 @@ void send_packets(int cnt) {
 			fprintf(stderr, "[!] Error: Couldn't bind to network\n");
 			close(sockfd);
 			break;
+		} else {
+			clock_gettime(CLOCK_MONOTONIC, &current);
+			duration = (double) current.tv_sec - start.tv_sec;
+			printf("[%.2lfs] Sent DISCOVER (%d/%d)\n", duration, i+1, cnt);
 		}
 
-		cnt--;
 		free_packet(packet);
 		sleep(DELAY);
 	}
@@ -168,17 +194,16 @@ int main(int args, char** argv) {
 
 	int packets_to_send = !strcmp(argv[1], "--packets") ? atoi(argv[2]) : 0;
 
+	printf("──── DHCP Packet Sender ────\n");
+
 	pthread_t listener_thread;
-
-	struct argument arguments = {0};
-	arguments.integer_part = packets_to_send;
-	arguments.char_pointer = "wlan0";
-
-	pthread_create(&listener_thread, NULL, read_packet, (void*) &arguments);
-
+	pthread_create(&listener_thread, NULL, read_packet, (void*) "wlan0"); // take wlan from user
 	send_packets(packets_to_send);
-
 	pthread_join(listener_thread, NULL);
-	printf("[+] Sent %d packets to the dhcp server\n", packets_to_send);
+
+	printf("\n──── Summary ────\n");
+	printf("Sent: %d DISCOVER packets", packets_to_send);
+	printf("Recieved: %d OFFERS", recieved);
+	printf("Unanswered requests: %d\n", packets_to_send - recieved);
 	return 0;
 }
