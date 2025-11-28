@@ -17,7 +17,7 @@
 #define DELAY 1
 #define TIME 5.0
 
-int recieved = 0;
+int recieved = 0, val = 0, sent = 0;
 
 void capture_packets(
 	double time,
@@ -110,6 +110,7 @@ cleanup:
 	pcap_freecode(&fp);
 	if (handle) pcap_close(handle);
 	printf("[#] Exitting ... \n");
+	val++;
 	return NULL;
 }
 
@@ -154,8 +155,9 @@ void send_packets(int cnt) {
 	struct timespec start, current;
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	double duration = 0.0;
+	int i = 0;
 
-	for (int i = 0; i < cnt; i++) {
+	for (; i < cnt && val == 0; i++) {
 		dhcp* packet = create_packet();
 		if (!packet) {
 			fprintf(stderr, "[!] Error: Creating packet for dhcp\n");
@@ -171,13 +173,19 @@ void send_packets(int cnt) {
 		} else {
 			clock_gettime(CLOCK_MONOTONIC, &current);
 			duration = (double) current.tv_sec - start.tv_sec;
-			printf("[%.2lfs] Sent DISCOVER (%d/%d)\n", duration, i+1, cnt);
+			const uint8_t* mac = packet->headers.chaddr;
+
+			printf("[%.2lfs] Sent DISCOVER (%d/%d) (MAC: %02x:%02x:%02x:%02x:%02x:%02x)\n",
+				duration, i+1, cnt,
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+			);
 		}
 
 		free_packet(packet);
 		sleep(DELAY);
 	}
 
+	sent = ++i;
 	close(sockfd);
 }
 
@@ -202,8 +210,8 @@ int main(int args, char** argv) {
 	pthread_join(listener_thread, NULL);
 
 	printf("\n──── Summary ────\n");
-	printf("Sent: %d DISCOVER packets", packets_to_send);
-	printf("Recieved: %d OFFERS", recieved);
-	printf("Unanswered requests: %d\n", packets_to_send - recieved);
+	printf("Sent: %d DISCOVER packets out of %d packets\n", sent, packets_to_send);
+	printf("Recieved: %d OFFERS\n", recieved);
+	printf("Unanswered requests: %d\n", sent - recieved);
 	return 0;
 }
