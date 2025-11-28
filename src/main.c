@@ -64,6 +64,11 @@ void* read_packet(void* _args) {
 		goto cleanup;
 	}
 
+	if (pcap_setnonblock(handle, 1, errbuf) < 0) {
+		fprintf(stderr, "[!] Error: Couldn't set non-blocking mode: %s\n", errbuf);
+		goto cleanup;
+	}
+
 	printf("[*] Sniffing for dhcp packets using %s\n", dev);
 
 	struct bpf_program fp;
@@ -79,30 +84,31 @@ void* read_packet(void* _args) {
 		goto cleanup;
 	}
 
-	struct timespec start_prog, start, current;
+	struct timespec start_prog, last_pkt, current;
 	struct pcap_pkthdr* header;
 	const u_char* packet;
 
-	double duration = 0.0;
-	clock_gettime(CLOCK_MONOTONIC, &start);
+	double since_last = 0.0;
+	clock_gettime(CLOCK_MONOTONIC, &last_pkt);
 	clock_gettime(CLOCK_MONOTONIC, &start_prog);
 
-	while (duration <= TIME) {
+	while (since_last < TIME) {
 		int ret = pcap_next_ex(handle, &header, &packet);
+		clock_gettime(CLOCK_MONOTONIC, &current);
+
+		since_last = (current.tv_sec - last_pkt.tv_sec) +
+				(current.tv_nsec - last_pkt.tv_nsec) / 1e9;
 
 		if (ret == 1) {
-			double time = (current.tv_sec - start_prog.tv_sec)
-							+ (current.tv_nsec - start_prog.tv_nsec) / 1e9;
+			double time = (current.tv_sec - start_prog.tv_sec) +
+				(current.tv_nsec - start_prog.tv_nsec) / 1e9;
+
 			capture_packets(time, header, packet);
-			clock_gettime(CLOCK_MONOTONIC, &start);
+			clock_gettime(CLOCK_MONOTONIC, &last_pkt);
 		} else if (ret == -1 || ret == -2) {
 			fprintf(stderr, "[!] Error: %s\n", pcap_geterr(handle));
 			break;
 		}
-
-		clock_gettime(CLOCK_MONOTONIC, &current);
-		duration = (current.tv_sec - start.tv_sec)
-                     + (current.tv_nsec - start.tv_nsec) / 1e9;
 	}
 
 cleanup:
