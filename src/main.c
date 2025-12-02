@@ -18,6 +18,10 @@
 #define TIME 5.0
 
 int recieved = 0, val = 0, sent = 0;
+struct sockaddr_in server_addr = {0};
+int sockfd = -1;
+
+void send_requests_packet(const dhcp* offer_pkt);
 
 void capture_packets(
 	double time,
@@ -28,7 +32,8 @@ void capture_packets(
 	int ip_len = ip->ip_hl * 4;
 
 	const dhcp* offer_packet = (dhcp*) (packet + sizeof(struct ether_header) + ip_len + sizeof(struct udphdr));
-	if (offer_packet->headers.op != 2) return;
+	// check for type of packet
+	if (offer_packet->headers.op != OFFER || offer_packet->headers.op != ACK) return;
 
 	const uint8_t* mac = offer_packet->headers.chaddr;
 	struct in_addr offered_ip;
@@ -43,6 +48,7 @@ void capture_packets(
 		inet_ntoa(offered_ip)
 	);
 
+	send_requests_packet(offer_packet);
 	recieved++;
 }
 
@@ -120,44 +126,7 @@ cleanup:
 	return NULL;
 }
 
-void send_packets(int cnt) {
-	int sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (sockfd < 0) {
-		fprintf(stderr, "[!] Error: Socket creation failed\n");
-		return;
-	}
-
-	int option_val = 1;
-	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &option_val, sizeof(option_val)) < 0) {
-		fprintf(stderr, "[!] Error: Couldn't set reuse options\n");
-		close(sockfd);
-		return;
-	}
-
-	if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &option_val, sizeof(option_val)) < 0) {
-		fprintf(stderr, "[!] Error: Couldn't set broadcast options\n");
-		close(sockfd);
-		return;
-	}
-
-	/* Bind client to port 68 (dhcp client port) */
-	struct sockaddr_in client_addr = {0};
-	client_addr.sin_family = AF_INET;
-	client_addr.sin_port = htons(DHCP_CLIENT_PORT);
-	client_addr.sin_addr.s_addr = INADDR_ANY;
-
-	if (bind(sockfd, (struct sockaddr*) &client_addr, sizeof(client_addr)) < 0) {
-		fprintf(stderr, "[!] Error: Couldn't bind to network\n");
-		close(sockfd);
-		return;
-	}
-
-	/* Broadcast to dhcp server */
-	struct sockaddr_in server_addr = {0};
-	server_addr.sin_family = AF_INET;
-	server_addr.sin_port = htons(DHCP_SERVER_PORT);
-	server_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-
+void sent_discover_packets(int cnt) {
 	struct timespec start, current;
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	double duration = 0.0;
@@ -181,7 +150,7 @@ void send_packets(int cnt) {
 			duration = (double) current.tv_sec - start.tv_sec;
 			const uint8_t* mac = packet->headers.chaddr;
 
-			printf("[%.2lfs] Sent DISCOVER (%d/%d) (MAC: %02x:%02x:%02x:%02x:%02x:%02x)\n",
+			printf("[ %.2lfs] Sent DISCOVER (%d/%d) (MAC: %02x:%02x:%02x:%02x:%02x:%02x)\n",
 				duration, i+1, cnt,
 				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
 			);
@@ -191,8 +160,98 @@ void send_packets(int cnt) {
 		sleep(DELAY);
 	}
 
-	sent = ++i;
+	sent = i;
 	close(sockfd);
+	sockfd = -1;
+}
+
+void send_requests_packet(const dhcp* offer_pkt) {
+	if (sockfd == -1) return;
+
+	dhcp* packet = create_packet();
+	if (!packet) {
+		fprintf(stderr, "[!] Error: Creating packet for dhcp\n");
+		return;
+	}
+
+	{
+		// Update packet for REQUEST
+		packet->headers.xid = offer_pkt->headers.xid;
+
+		uint8_t* ptr = packet->options;
+
+		ptr += 4;
+
+		ptr[0] = 53;
+		ptr[1] = 1;
+		ptr[2] = REQUEST;
+		ptr += 3;
+
+		ptr += 2 + ptr[1];
+
+		*ptr++ = 50;
+		*ptr++ = 4;
+		memcpy(ptr, &offer_pkt->headers.yiaddrs, 4);
+		ptr += 4;
+
+		*ptr++ = 54;
+		*ptr++ = 4;
+		memcpy(ptr, &offer_pkt->headers.siaddrs, 4);
+		ptr += 4;
+
+		*ptr++ = 0xFF;
+	}
+
+	if (sendto(sockfd, packet, sizeof(dhcp), 0,
+			(struct sockaddr*) &server_addr, sizeof(server_addr)) < 0)
+	{
+		fprintf(stderr, "[!] Error: Couldn't bind to network\n");
+		close(sockfd);
+	} else {
+		printf("[ DISCOVER] Packet sent");
+	}
+
+	free_packet(packet);
+}
+
+int set_socket() {
+	sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (sockfd < 0) {
+		fprintf(stderr, "[!] Error: Socket creation failed\n");
+		return 1;
+	}
+
+	int option_val = 1;
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &option_val, sizeof(option_val)) < 0) {
+		fprintf(stderr, "[!] Error: Couldn't set reuse options\n");
+		close(sockfd);
+		return 1;
+	}
+
+	if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &option_val, sizeof(option_val)) < 0) {
+		fprintf(stderr, "[!] Error: Couldn't set broadcast options\n");
+		close(sockfd);
+		return 1;
+	}
+
+	/* Bind client to port 68 (dhcp client port) */
+	struct sockaddr_in client_addr = {0};
+	client_addr.sin_family = AF_INET;
+	client_addr.sin_port = htons(DHCP_CLIENT_PORT);
+	client_addr.sin_addr.s_addr = INADDR_ANY;
+
+	if (bind(sockfd, (struct sockaddr*) &client_addr, sizeof(client_addr)) < 0) {
+		fprintf(stderr, "[!] Error: Couldn't bind to network\n");
+		close(sockfd);
+		return 1;
+	}
+
+	/* Broadcast to dhcp server */
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(DHCP_SERVER_PORT);
+	server_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+
+	return 0;
 }
 
 int main(int args, char** argv) {
@@ -212,7 +271,10 @@ int main(int args, char** argv) {
 
 	pthread_t listener_thread;
 	pthread_create(&listener_thread, NULL, read_packet, (void*) "wlan0"); // take wlan from user
-	send_packets(packets_to_send);
+
+	if (set_socket()) return 1;
+
+	sent_discover_packets(packets_to_send);
 	pthread_join(listener_thread, NULL);
 
 	printf("\n──── Summary ────\n");

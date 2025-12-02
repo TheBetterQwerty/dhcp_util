@@ -6,7 +6,7 @@
 #pragma pack(push, 1)
 
 struct dhcp_header {
-	uint8_t op;			// Message op code: 1=requst, 2=reply
+	uint8_t op;			// Message op code: 1=request, 2=reply
 	uint8_t htype;		// Hardware type: 1=Ethernet
 	uint8_t hlen;		// Hardware address length: 6 for Mac
 	uint8_t hops;		// Ususually 0
@@ -23,6 +23,13 @@ struct dhcp_header {
 	uint8_t chaddr[16];	// Client hardware addrs (MAC + Padding)
 	uint8_t sname[64];	// Opt sever host name
 	uint8_t file[128];	// Boot file name
+};
+
+enum DHCP_PACKET_TYPE {
+	DISCOVER = 1,
+	OFFER = 2,
+	REQUEST = 3,
+	ACK = 5,
 };
 
 typedef struct {

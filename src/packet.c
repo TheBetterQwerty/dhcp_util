@@ -20,7 +20,7 @@ dhcp* create_packet() {
 	if (!packet) return NULL;
 
 	/* Headers */
-	packet->headers.op = 1;
+	packet->headers.op = 1; // request
 	packet->headers.htype = 1;
 	packet->headers.hlen = 6;
 	packet->headers.hops = 0;
@@ -49,7 +49,7 @@ dhcp* create_packet() {
 
 	*ptr++ = 53;
 	*ptr++ = 1;
-	*ptr++ = 1; // discover
+	*ptr++ = 1;
 
 	uint8_t temp_list[] = {1, 3, 6, 15, 28, 51, 58, 59};
 	*ptr++ = 55;
