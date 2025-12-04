@@ -39,9 +39,9 @@ dhcp* create_discover_packet() {
 	packet->headers.flags = htons(0x8000); // broadcast flag
 
 	packet->headers.ciaddr = 0;
-	packet->headers.yiaddrs = 0;
-	packet->headers.siaddrs = 0;
-	packet->headers.giaddrs = 0;
+	packet->headers.yiaddr = 0;
+	packet->headers.siaddr = 0;
+	packet->headers.giaddr = 0;
 
 	memset(packet->headers.chaddr, 0, sizeof(packet->headers.chaddr));
 	memset(packet->headers.sname, 0, sizeof(packet->headers.sname));
@@ -56,9 +56,8 @@ dhcp* create_discover_packet() {
 	memcpy(ptr, "\x63\x82\x53\x63", 4);
 	ptr += 4;
 
-	*ptr++ = 53;
-	*ptr++ = 1;
-	*ptr++ = 1;
+	uint8_t msg = DISCOVER;
+	append_option(&ptr, 53, &msg, 1);
 
 	uint8_t temp_list[] = {1, 3, 6, 15, 28, 51, 58, 59};
 	append_option(&ptr, 55, temp_list, sizeof(temp_list));
@@ -76,6 +75,29 @@ dhcp* create_request_packet(const dhcp* offer_pkt) {
 
 	memset(packet, 0, sizeof(dhcp));
 
+	uint32_t server_id = 0;
+	{
+		const uint8_t* p = offer_pkt->options;
+		p += 4; // skip magic cookies
+
+		while (*p != 0xFF) {
+			uint8_t code = p[0];
+			uint8_t len = p[1];
+
+			if (code == 54 && len == 4) {
+				memcpy(&server_id, p + 2, 4);
+				break;
+			}
+
+			p += 2 + len;
+		}
+	}
+
+	if (server_id == 0) {
+		free(packet);
+		return NULL;
+	}
+
 	/* Headers */
 	packet->headers.op = 1; // BOOTREQUEST
 	packet->headers.htype = 1;
@@ -87,9 +109,9 @@ dhcp* create_request_packet(const dhcp* offer_pkt) {
 	packet->headers.flags = htons(0x8000); // broadcast flag
 
 	packet->headers.ciaddr = 0;
-	packet->headers.yiaddrs = 0;
-	packet->headers.siaddrs = 0;
-	packet->headers.giaddrs = 0;
+	packet->headers.yiaddr = 0;
+	packet->headers.siaddr = 0;
+	packet->headers.giaddr = 0;
 
 	memcpy(packet->headers.chaddr, offer_pkt->headers.chaddr, 6);
 
@@ -100,21 +122,21 @@ dhcp* create_request_packet(const dhcp* offer_pkt) {
 	memcpy(ptr, "\x63\x82\x53\x63", 4);
 	ptr += 4;
 
-	// DHCP Message Type = REQUEST
-	uint8_t msg_type = 3; // REQUEST
-	append_option(&ptr, 53, &msg_type, 1);
+	uint8_t client_id[7];
+	client_id[0] = 1; // Ethernet
+	memcpy(client_id + 1, offer_pkt->headers.chaddr, 6);
+	append_option(&ptr, 61, client_id, sizeof(client_id));
+
+	// Requested IP (from OFFER)
+	append_option(&ptr, 50, (uint8_t*)&offer_pkt->headers.yiaddr, 4);
+
+	// Server Identifier (from OFFER)
+	append_option(&ptr, 54, (uint8_t*) &server_id, 4);
 
 	// Parameter Request List (common options client wants)
 	uint8_t param_req_list[] = {1, 3, 6, 15, 28, 51, 58, 59};
 	append_option(&ptr, 55, param_req_list, sizeof(param_req_list));
 
-	// Requested IP (from OFFER)
-	append_option(&ptr, 50, (uint8_t*)&offer_pkt->headers.yiaddrs, 4);
-
-	// Server Identifier (from OFFER)
-	append_option(&ptr, 54, (uint8_t*)&offer_pkt->headers.siaddrs, 4);
-
-	// End Option
 	*ptr++ = 0xFF;
 
 	return packet;

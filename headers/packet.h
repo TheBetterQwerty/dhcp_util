@@ -16,9 +16,9 @@ struct dhcp_header {
 	uint16_t flags;		// Flags (set to 0)
 
 	uint32_t ciaddr;	// Client IP (0.0.0.0 for discover)
-	uint32_t yiaddrs;	// Server fills this
-	uint32_t siaddrs;	// Next server IP
-	uint32_t giaddrs;	// Relay agent IP
+	uint32_t yiaddr;	// Server fills this
+	uint32_t siaddr;	// Next server IP
+	uint32_t giaddr;	// Relay agent IP
 
 	uint8_t chaddr[16];	// Client hardware addrs (MAC + Padding)
 	uint8_t sname[64];	// Opt sever host name

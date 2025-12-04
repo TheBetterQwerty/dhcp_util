@@ -35,7 +35,7 @@ void capture_packets(
 
 	const uint8_t* mac = offer_packet->headers.chaddr;
 	struct in_addr offered_ip;
-	offered_ip.s_addr = offer_packet->headers.yiaddrs;
+	offered_ip.s_addr = offer_packet->headers.yiaddr;
 
 	// magic cookie check
 	if (memcmp(offer_packet->options, "\x63\x82\x53\x63", 4)) return;
@@ -189,7 +189,7 @@ void send_requests_packet(const dhcp* offer_pkt) {
 		fprintf(stderr, "[!] Error: Couldn't bind to network\n");
 		close(sockfd);
 	} else {
-		printf("[ REQUEST] Packet sent"); // debug
+		printf("[ REQUEST] Packet sent\n"); // debug
 	}
 
 	free_packet(packet);
