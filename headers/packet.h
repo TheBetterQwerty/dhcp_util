@@ -39,7 +39,8 @@ typedef struct {
 
 #pragma pack(pop)
 
-dhcp* create_packet();
+dhcp* create_discover_packet();
+dhcp* create_request_packet(const dhcp* offer_pkt);
 void free_packet(dhcp* packet);
 
 #endif

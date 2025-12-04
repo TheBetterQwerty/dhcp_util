@@ -15,9 +15,18 @@ void random_mac_address(uint8_t* addr) {
 	addr[0] |= 0x02;   // Set locally-administered bit
 }
 
-dhcp* create_packet() {
+void append_option(uint8_t** ptr, uint8_t n, uint8_t* arr, uint8_t size) {
+	if (!*ptr) return;
+	*(*ptr)++ = n;
+	*(*ptr)++ = size;
+	memcpy(*ptr, arr, size);
+	*ptr += size;
+}
+
+dhcp* create_discover_packet() {
 	dhcp* packet = malloc(sizeof(dhcp));
 	if (!packet) return NULL;
+	memset(packet, 0, sizeof(dhcp));
 
 	/* Headers */
 	packet->headers.op = 1; // request
@@ -52,11 +61,60 @@ dhcp* create_packet() {
 	*ptr++ = 1;
 
 	uint8_t temp_list[] = {1, 3, 6, 15, 28, 51, 58, 59};
-	*ptr++ = 55;
-	*ptr++ = sizeof(temp_list);
-	memcpy(ptr, temp_list, sizeof(temp_list));
-	ptr += sizeof(temp_list);
+	append_option(&ptr, 55, temp_list, sizeof(temp_list));
 
+	*ptr++ = 0xFF;
+
+	return packet;
+}
+
+dhcp* create_request_packet(const dhcp* offer_pkt) {
+	if (!offer_pkt) return NULL;
+
+	dhcp* packet = malloc(sizeof(dhcp));
+	if (!packet) return NULL;
+
+	memset(packet, 0, sizeof(dhcp));
+
+	/* Headers */
+	packet->headers.op = 1; // BOOTREQUEST
+	packet->headers.htype = 1;
+	packet->headers.hlen  = 6; // MAC length
+    packet->headers.hops  = 0;
+
+	packet->headers.xid = offer_pkt->headers.xid;
+	packet->headers.secs = 0;
+	packet->headers.flags = htons(0x8000); // broadcast flag
+
+	packet->headers.ciaddr = 0;
+	packet->headers.yiaddrs = 0;
+	packet->headers.siaddrs = 0;
+	packet->headers.giaddrs = 0;
+
+	memcpy(packet->headers.chaddr, offer_pkt->headers.chaddr, 6);
+
+	/* Options Setting */
+	uint8_t* ptr = packet->options;
+
+	/* Magic cookies */
+	memcpy(ptr, "\x63\x82\x53\x63", 4);
+	ptr += 4;
+
+	// DHCP Message Type = REQUEST
+	uint8_t msg_type = 3; // REQUEST
+	append_option(&ptr, 53, &msg_type, 1);
+
+	// Parameter Request List (common options client wants)
+	uint8_t param_req_list[] = {1, 3, 6, 15, 28, 51, 58, 59};
+	append_option(&ptr, 55, param_req_list, sizeof(param_req_list));
+
+	// Requested IP (from OFFER)
+	append_option(&ptr, 50, (uint8_t*)&offer_pkt->headers.yiaddrs, 4);
+
+	// Server Identifier (from OFFER)
+	append_option(&ptr, 54, (uint8_t*)&offer_pkt->headers.siaddrs, 4);
+
+	// End Option
 	*ptr++ = 0xFF;
 
 	return packet;

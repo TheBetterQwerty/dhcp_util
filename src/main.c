@@ -17,9 +17,9 @@
 #define DELAY 1
 #define TIME 5.0
 
-int recieved = 0, val = 0, sent = 0;
 struct sockaddr_in server_addr = {0};
-int sockfd = -1;
+int sockfd = -1, kill_flag = 0;
+int offer_pkt_cnt = 0, ack_pkt_cnt = 0, discover_pkt_cnt = 0, request_pkt_cnt = 0;
 
 void send_requests_packet(const dhcp* offer_pkt);
 
@@ -32,8 +32,6 @@ void capture_packets(
 	int ip_len = ip->ip_hl * 4;
 
 	const dhcp* offer_packet = (dhcp*) (packet + sizeof(struct ether_header) + ip_len + sizeof(struct udphdr));
-	// check for type of packet
-	if (offer_packet->headers.op != OFFER || offer_packet->headers.op != ACK) return;
 
 	const uint8_t* mac = offer_packet->headers.chaddr;
 	struct in_addr offered_ip;
@@ -42,14 +40,27 @@ void capture_packets(
 	// magic cookie check
 	if (memcmp(offer_packet->options, "\x63\x82\x53\x63", 4)) return;
 
-	printf("[ %.2lfs] OFFER: MAC %02x:%02x:%02x:%02x:%02x:%02x -> IP %s\n",
-		time,
-		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-		inet_ntoa(offered_ip)
-	);
+	switch (offer_packet->headers.op) {
+		case OFFER:
+			printf("[ %.2lfs] OFFER: MAC %02x:%02x:%02x:%02x:%02x:%02x -> IP %s\n",
+				time,
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+				inet_ntoa(offered_ip)
+			);
+			send_requests_packet(offer_packet);
+			offer_pkt_cnt++;
+			break;
 
-	send_requests_packet(offer_packet);
-	recieved++;
+		case ACK:
+			printf("[ %.2lfs] ACK: MAC %02x:%02x:%02x:%02x:%02x:%02x -> IP %s\n",
+				time,
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+				inet_ntoa(offered_ip)
+			);
+			// print lease time
+			ack_pkt_cnt++;
+			break;
+	}
 }
 
 void* read_packet(void* _args) {
@@ -122,7 +133,7 @@ cleanup:
 	pcap_freecode(&fp);
 	if (handle) pcap_close(handle);
 	printf("[#] Exitting ... \n");
-	val++;
+	kill_flag++;
 	return NULL;
 }
 
@@ -130,10 +141,9 @@ void sent_discover_packets(int cnt) {
 	struct timespec start, current;
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	double duration = 0.0;
-	int i = 0;
 
-	for (; i < cnt && val == 0; i++) {
-		dhcp* packet = create_packet();
+	for (; discover_pkt_cnt < cnt && kill_flag == 0; discover_pkt_cnt++) {
+		dhcp* packet = create_discover_packet();
 		if (!packet) {
 			fprintf(stderr, "[!] Error: Creating packet for dhcp\n");
 			break;
@@ -151,7 +161,7 @@ void sent_discover_packets(int cnt) {
 			const uint8_t* mac = packet->headers.chaddr;
 
 			printf("[ %.2lfs] Sent DISCOVER (%d/%d) (MAC: %02x:%02x:%02x:%02x:%02x:%02x)\n",
-				duration, i+1, cnt,
+				duration, discover_pkt_cnt + 1, cnt,
 				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
 			);
 		}
@@ -160,7 +170,6 @@ void sent_discover_packets(int cnt) {
 		sleep(DELAY);
 	}
 
-	sent = i;
 	close(sockfd);
 	sockfd = -1;
 }
@@ -168,38 +177,10 @@ void sent_discover_packets(int cnt) {
 void send_requests_packet(const dhcp* offer_pkt) {
 	if (sockfd == -1) return;
 
-	dhcp* packet = create_packet();
+	dhcp* packet = create_request_packet(offer_pkt);
 	if (!packet) {
 		fprintf(stderr, "[!] Error: Creating packet for dhcp\n");
 		return;
-	}
-
-	{
-		// Update packet for REQUEST
-		packet->headers.xid = offer_pkt->headers.xid;
-
-		uint8_t* ptr = packet->options;
-
-		ptr += 4;
-
-		ptr[0] = 53;
-		ptr[1] = 1;
-		ptr[2] = REQUEST;
-		ptr += 3;
-
-		ptr += 2 + ptr[1];
-
-		*ptr++ = 50;
-		*ptr++ = 4;
-		memcpy(ptr, &offer_pkt->headers.yiaddrs, 4);
-		ptr += 4;
-
-		*ptr++ = 54;
-		*ptr++ = 4;
-		memcpy(ptr, &offer_pkt->headers.siaddrs, 4);
-		ptr += 4;
-
-		*ptr++ = 0xFF;
 	}
 
 	if (sendto(sockfd, packet, sizeof(dhcp), 0,
@@ -208,10 +189,11 @@ void send_requests_packet(const dhcp* offer_pkt) {
 		fprintf(stderr, "[!] Error: Couldn't bind to network\n");
 		close(sockfd);
 	} else {
-		printf("[ DISCOVER] Packet sent");
+		printf("[ REQUEST] Packet sent"); // debug
 	}
 
 	free_packet(packet);
+	request_pkt_cnt++;
 }
 
 int set_socket() {
@@ -267,19 +249,19 @@ int main(int args, char** argv) {
 
 	int packets_to_send = !strcmp(argv[1], "--packets") ? atoi(argv[2]) : 0;
 
+	if (set_socket()) return 1;
+
 	printf("──── DHCP Packet Sender ────\n");
 
 	pthread_t listener_thread;
 	pthread_create(&listener_thread, NULL, read_packet, (void*) "wlan0"); // take wlan from user
-
-	if (set_socket()) return 1;
-
 	sent_discover_packets(packets_to_send);
 	pthread_join(listener_thread, NULL);
 
 	printf("\n──── Summary ────\n");
-	printf("Sent: %d DISCOVER packets out of %d packets\n", sent, packets_to_send);
-	printf("Recieved: %d OFFERS\n", recieved);
-	printf("Unanswered requests: %d\n", sent - recieved);
+	printf("Sent: %d DISCOVER packets out of %d packets\n", discover_pkt_cnt, packets_to_send);
+	printf("Recieved: %d OFFERS\n", offer_pkt_cnt);
+	printf("Sent: %d REQUEST\n", request_pkt_cnt);
+	printf("Recieved: %d ACK\n", ack_pkt_cnt);
 	return 0;
 }
