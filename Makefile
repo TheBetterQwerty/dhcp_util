@@ -1,7 +1,7 @@
 cc = gcc
 
-source = src/main.c src/packet.c
-binary = starver
+source = src/*
+binary = build/starver
 
 flags = -Wextra -Wall -O3
 cflags = -lpcap -lpthread

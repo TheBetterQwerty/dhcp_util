@@ -10,12 +10,13 @@
 #include <net/ethernet.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include "../headers/packet.h"
+
+#include "../headers/dhcp/dhcp_packet.h"
 
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67
 #define DELAY 1
-#define TIME 5.0
+#define TIME 10.0
 
 struct sockaddr_in server_addr = {0};
 int sockfd = -1, kill_flag = 0;
@@ -40,13 +41,29 @@ void capture_packets(
 	// magic cookie check
 	if (memcmp(offer_packet->options, "\x63\x82\x53\x63", 4)) return;
 
-	switch (offer_packet->headers.op) {
+	uint8_t dhcp_type = 0;
+	const uint8_t* opt = offer_packet->options + 4;
+	{
+		while (*opt != 0xFF) {
+			if (opt[0] == 53 && opt[1] == 1) {
+				dhcp_type = opt[2];
+				break;
+			}
+
+			opt += 2 + opt[1];
+		}
+	}
+
+	if (!dhcp_type) return;
+
+	switch (dhcp_type) {
 		case OFFER:
 			printf("[ %.2lfs] OFFER: MAC %02x:%02x:%02x:%02x:%02x:%02x -> IP %s\n",
 				time,
 				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
 				inet_ntoa(offered_ip)
 			);
+			usleep(200000);
 			send_requests_packet(offer_packet);
 			offer_pkt_cnt++;
 			break;
@@ -214,6 +231,11 @@ int set_socket() {
 		fprintf(stderr, "[!] Error: Couldn't set broadcast options\n");
 		close(sockfd);
 		return 1;
+	}
+
+	int set_val = 1;
+	if (setsockopt(sockfd, SOL_SOCKET, SO_NO_CHECK, &set_val, sizeof(set_val)) < 0) {
+		perror("setsockopt UDP_CKSUM_REQUIRED failed");
 	}
 
 	/* Bind client to port 68 (dhcp client port) */
