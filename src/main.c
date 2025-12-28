@@ -263,7 +263,6 @@ int main(int args, char** argv) {
 		fprintf(stderr, "[!] Error: This script requires elevated privilages!\n");
 		return 1;
 	}
-
 	if (args < 3) {
 		fprintf(stderr, "[!] Usage: %s --packets <number>\n", argv[0]);
 		return 1;
